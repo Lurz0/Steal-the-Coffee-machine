@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Steal the Coffee Machine</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #080d18;
+    color: #fff;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  #game {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    background: radial-gradient(circle at 50% 10%, #243653, #0b1220 72%);
+    cursor: default;
+  }
+  #ui {
+    position: fixed;
+    top: 22px;
+    left: 22px;
+    z-index: 5;
+    background: rgba(15, 23, 42, .78);
+    border: 1px solid rgba(148,163,184,.25);
+    border-radius: 16px;
+    padding: 16px 18px;
+    min-width: 285px;
+    box-shadow: 0 16px 45px rgba(0,0,0,.38), inset 0 1px rgba(255,255,255,.08);
+    backdrop-filter: blur(16px);
+  }
+  #ui b { color: #f8c967; letter-spacing: .08em; font-size: 13px; }
+  #status { margin-top: 8px; color: #f8fafc; font-weight: 650; }
+  #message {
+    margin-top: 7px;
+    color: #a9b7cc;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    background: rgba(3,7,18,.78);
+    backdrop-filter: blur(10px);
+  }
+  #panel {
+    width: min(520px, 90vw);
+    text-align: center;
+    background: linear-gradient(145deg, #17243b, #0e1729);
+    border: 1px solid rgba(148,163,184,.3);
+    border-radius: 24px;
+    padding: 34px;
+    box-shadow: 0 25px 90px rgba(0,0,0,.6), inset 0 1px rgba(255,255,255,.08);
+  }
+  #panel h1 { margin-top: 0; font-size: 34px; letter-spacing: -.04em; }
+  #panel p { color: #c5cbd5; line-height: 1.5; }
+  #cutscene {
+    position: fixed; inset: 0; z-index: 8; display: flex; align-items: center;
+    justify-content: center; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(11,18,32,.25), rgba(3,7,18,.92));
+    transition: opacity .6s ease;
+  }
+  #cutscene.show { opacity: 1; }
+  #cutsceneText { max-width: 680px; padding: 26px 34px; color: #f8fafc;
+    font-size: clamp(20px, 3vw, 34px); font-weight: 750; text-align: center;
+    text-shadow: 0 3px 20px #000; letter-spacing: .02em; }
+  button {
+    border: 0;
+    border-radius: 9px;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    background: linear-gradient(135deg, #ffd166, #f59e0b);
+    color: #172033;
+    box-shadow: 0 8px 20px rgba(245,158,11,.25);
+  }
+  button:hover { filter: brightness(1.08); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="ui">
+  <div><b>☕ STEAL THE COFFEE MACHINE</b></div>
+  <div id="status">Hitta Eriks kaffemaskin.</div>
+  <div id="message">WASD / piltangenter = gå · E = ta kaffemaskinen</div>
+</div>
+
+<div id="overlay">
+  <div id="panel">
+    <h1 id="resultTitle"></h1>
+    <p id="resultText"></p>
+    <button id="restartBtn">Spela igen</button>
+  </div>
+</div>
+<div id="cutscene"><div id="cutsceneText"></div></div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const messageEl = document.getElementById("message");
+const overlay = document.getElementById("overlay");
+const resultTitle = document.getElementById("resultTitle");
+const resultText = document.getElementById("resultText");
+const restartBtn = document.getElementById("restartBtn");
+const cutscene = document.getElementById("cutscene");
+const cutsceneText = document.getElementById("cutsceneText");
+let introPlaying = true;
+let introTime = 0;
+
+restartBtn.addEventListener("click", () => {
+  // Starta om spelet utan att vara beroende av att webbläsaren tillåter location.reload().
+  gameOver = false;
+  overlay.style.display = "none";
+  player.x = 8.2;
+  player.y = 13.6;
+  player.carrying = false;
+  player.room = 0;
+  player.hidden = false;
+  erik.x = 11.2;
+  erik.y = 8.2;
+  patrolIndex = 0;
+  coffee.taken = false;
+  detectedTimer = 0;
+  secondRoom = false;
+  livingRoomTime = 0;
+  livingRoomLit = true;
+  introPlaying = true;
+  introTime = 0;
+  cutscene.classList.remove("show");
+  statusEl.textContent = "Hitta Eriks kaffemaskin.";
+  messageEl.textContent = "WASD / piltangenter = gå · E = ta kaffemaskinen";
+  messageEl.style.color = "#b9c2d0";
+});
+
+function resize() {
+  canvas.width = innerWidth * devicePixelRatio;
+  canvas.height = innerHeight * devicePixelRatio;
+  canvas.style.width = innerWidth + "px";
+  canvas.style.height = innerHeight + "px";
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+addEventListener("resize", resize);
+resize();
+
+const keys = {};
+addEventListener("keydown", e => {
+  keys[e.key.toLowerCase()] = true;
+  if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(e.key.toLowerCase()))
+    e.preventDefault();
+
+  if (e.key.toLowerCase() === "e") { tryTakeCoffee(); tryOpenDoor(); }
+  if (e.key.toLowerCase() === "r" && gameOver) location.reload();
+});
+addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+// World coordinates. The world is drawn with an isometric transform.
+const TILE_W = 76;
+const TILE_H = 38;
+
+const map = [
+  "##################",
+  "#................#",
+  "#................#",
+  "#....######......#",
+  "#....#....#......#",
+  "#....#....#......#",
+  "#....#....#......#",
+  "#....#....#......#",
+  "#....#....#......#",
+  "#....#..........##",
+  "#....#..........##",
+  "#....######......#",
+  "#................#",
+  "#................#",
+  "#.................",
+  "##################"
+];
+
+// Coordinates are tile positions. The bottom opening is the entrance.
+const player = {x: 8.2, y: 13.6, r: .28, speed: 3.1, carrying: false, room: 0, hidden: false};
+const erik = {x: 11.2, y: 8.2, r: .3, speed: 1.45, dir: 0, wait: 0};
+const coffee = {x: 14.0, y: 5.4, taken: false};
+
+// Möblerna fungerar även som skydd: deras solida volymer stoppar både spelaren
+// och Eriks siktlinje.
+const furniture = [
+  {x:3.0,y:2.4,w:.78,h:.42,type:"table"},
+  {x:5.0,y:2.4,w:.88,h:.50,type:"sofa"},
+  {x:13.2,y:12.4,w:.95,h:.42,type:"desk"},
+  {x:4.2,y:10.6,w:.88,h:.52,type:"bed"}
+];
+
+const patrol = [
+  {x: 11.2,y:8.2},
+  {x: 14.2,y:8.2},
+  {x: 14.2,y:11.4},
+  {x: 10.8,y:11.4},
+  {x: 10.8,y:8.2}
+];
+let patrolIndex = 0;
+
+let gameOver = false;
+let secondRoom = false;
+let livingRoomTime = 0;
+let livingRoomLit = false;
+let detectedTimer = 0;
+let last = performance.now();
+
+function isWall(x,y) {
+  if (secondRoom) {
+    return x < 0 || x > 16 || y < 0 || y > 12;
+  }
+
+  const tx = Math.floor(x), ty = Math.floor(y);
+  if (ty < 0 || ty >= map.length || tx < 0 || tx >= map[0].length) return true;
+  return map[ty][tx] === "#";
+}
+
+function blocked(x,y,r=.25) {
+  const pts = [
+    [x-r,y-r],[x+r,y-r],[x-r,y+r],[x+r,y+r],
+    [x+r,y],[x-r,y],[x,y+r],[x,y-r]
+  ];
+  return pts.some(([px,py]) => isWall(px,py)) || furniture.filter(() => !secondRoom || livingRoomLit).some(f =>
+    x+r>f.x-f.w/2 && x-r<f.x+f.w/2 && y+r>f.y-f.h/2 && y-r<f.y+f.h/2);
+}
+
+function moveEntity(obj, dx, dy) {
+  const nx = obj.x + dx;
+  if (!blocked(nx,obj.y,obj.r)) obj.x = nx;
+  const ny = obj.y + dy;
+  if (!blocked(obj.x,ny,obj.r)) obj.y = ny;
+}
+
+function worldToScreen(x,y) {
+  const ox = innerWidth / 2;
+  const oy = 90;
+  return {
+    x: ox + (x-y) * TILE_W/2,
+    y: oy + (x+y) * TILE_H/2
+  };
+}
+
+function screenToWorld(sx,sy) {
+  const ox = innerWidth/2, oy=90;
+  const a = (sx-ox)/(TILE_W/2);
+  const b = (sy-oy)/(TILE_H/2);
+  return {x:(a+b)/2,y:(b-a)/2};
+}
+
+function roundedRectPath(x,y,w,h,r) {
+  const rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function drawDiamond(cx,cy,w,h,fill,stroke) {
+  ctx.beginPath();
+  ctx.moveTo(cx,cy-h/2);
+  ctx.lineTo(cx+w/2,cy);
+  ctx.lineTo(cx,cy+h/2);
+  ctx.lineTo(cx-w/2,cy);
+  ctx.closePath();
+  ctx.fillStyle=fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle=stroke;
+    ctx.stroke();
+  }
+}
+
+function drawFloor() {
+  if(secondRoom){
+    ctx.fillStyle="#151923"; ctx.fillRect(0,0,innerWidth,innerHeight);
+    for(let y=0;y<13;y++) for(let x=0;x<17;x++){
+      const p=worldToScreen(x+.5,y+.5);
+      drawDiamond(p.x,p.y,TILE_W,TILE_H,(x+y)%2?"#343744":"#3b3e49","#555965");
+    }
+    // Bright living-room boundaries, with the entrance at the bottom.
+    for(let x=0;x<17;x++){ if(x<5||x>10) drawDiamond(...Object.values(worldToScreen(x+.5,0)),TILE_W,TILE_H,"#202733"); drawDiamond(...Object.values(worldToScreen(x+.5,12)),TILE_W,TILE_H,"#202733"); }
+    for(let y=1;y<12;y++){ drawDiamond(...Object.values(worldToScreen(0,y+.5)),TILE_W,TILE_H,"#202733"); drawDiamond(...Object.values(worldToScreen(16,y+.5)),TILE_W,TILE_H,"#202733"); }
+    [[3.2,1.2],[8.8,1.3],[11.0,7.5],[13.6,8.8]].forEach(([x,y])=>{
+      const lp=worldToScreen(x,y);
+      ctx.save(); ctx.globalAlpha=.18; ctx.fillStyle="#ffe3a3";
+      ctx.shadowColor="#ffc45e"; ctx.shadowBlur=24;
+      ctx.beginPath(); ctx.arc(lp.x,lp.y,130,0,Math.PI*2); ctx.fill(); ctx.restore();
+    });
+    drawSofa3D(3.5,3.2,2.2,0.82,"#304c70");
+    drawSofa3D(8.9,2.9,1.9,0.75,"#6b3f55");
+    drawSofa3D(12.6,8.2,2.2,0.8,"#415d8f");
+    drawWardrobe3D(2,6.1,1.05,0.62);
+    drawWardrobe3D(9.35,6.7,1.12,0.62);
+    drawWardrobe3D(13.7,4.8,1.1,0.68);
+    return;
+  }
+  for (let y=0;y<map.length;y++) {
+    for (let x=0;x<map[y].length;x++) {
+      const s = worldToScreen(x+.5,y+.5);
+      if (map[y][x] === "#") {
+        drawDiamond(s.x,s.y,TILE_W,TILE_H,"#263653","#17243a");
+        // Small wall block
+        ctx.fillStyle="#344968";
+        ctx.beginPath();
+        ctx.moveTo(s.x-TILE_W/2,s.y);
+        ctx.lineTo(s.x,s.y+TILE_H/2);
+        ctx.lineTo(s.x,s.y+TILE_H/2+24);
+        ctx.lineTo(s.x-TILE_W/2,s.y+24);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(s.x+TILE_W/2,s.y);
+        ctx.lineTo(s.x,s.y+TILE_H/2);
+        ctx.lineTo(s.x,s.y+TILE_H/2+24);
+        ctx.lineTo(s.x+TILE_W/2,s.y+24);
+        ctx.closePath(); ctx.fill();
+      } else {
+        const floor = ((x+y)%2===0) ? "#53647a" : "#48596f";
+        drawDiamond(s.x,s.y,TILE_W,TILE_H,floor,"#718096");
+        // Subtle parquet seams and warm pools of light give the room depth.
+        ctx.save();
+        ctx.globalAlpha=.16;
+        ctx.strokeStyle="#d9b982"; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(s.x-TILE_W*.28,s.y); ctx.lineTo(s.x,s.y+TILE_H*.28); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Door/entrance marker
+  const d = worldToScreen(8.2,15.15);
+  ctx.fillStyle="#d18b4c";
+  ctx.fillRect(d.x-22,d.y-8,44,16);
+  ctx.fillStyle="#ffe08a";
+  ctx.fillRect(d.x+11,d.y-2,5,5);
+
+  // Dörren till Eriks vardagsrum blir synlig efter att kaffemaskinen tagits.
+  if(coffee.taken){
+    const door=worldToScreen(11.8,1.05);
+    ctx.fillStyle="#171522"; ctx.fillRect(door.x-25,door.y-34,50,38);
+    ctx.strokeStyle="#d18b4c"; ctx.lineWidth=3; ctx.strokeRect(door.x-25,door.y-34,50,38);
+    ctx.fillStyle="#ffd166"; ctx.fillRect(door.x+14,door.y-16,5,5);
+  }
+
+  // Furniture
+  furniture.forEach(f => drawFurniture(f.x,f.y,f.type));
+  // Wall sconces and framed art make the house feel lived-in.
+  [[2.2,0.65],[9.2,0.65],[16.1,4.2],[16.1,10.2]].forEach(([x,y],i)=>{
+    const p=worldToScreen(x,y);
+    ctx.save(); ctx.shadowColor="#ffc76b"; ctx.shadowBlur=18;
+    ctx.fillStyle="#8e684a"; ctx.fillRect(p.x-9,p.y-15,18,24);
+    ctx.fillStyle=i%2?"#ffe0a0":"#ffd078"; ctx.fillRect(p.x-5,p.y-11,10,13);
+    ctx.restore();
+  });
+  const rug=worldToScreen(11.8,9.8);
+  drawDiamond(rug.x,rug.y,180,84,"rgba(139,75,83,.65)","rgba(235,173,133,.55)");
+}
+
+function drawFurniture(x,y,type) {
+  const s=worldToScreen(x,y);
+  ctx.save();
+  ctx.shadowColor="rgba(3,8,20,.42)";
+  ctx.shadowBlur=12;
+  ctx.shadowOffsetY=7;
+  // Ben och en mjuk kant ger möblerna tydligare djup i den isometriska vyn.
+  const leg = (lx,ly) => { ctx.fillStyle="#30251f"; ctx.fillRect(s.x+lx,s.y+ly,5,16); };
+  if(type==="table"){
+    ctx.fillStyle="#6b422b"; ctx.fillRect(s.x-30,s.y-13,60,22);
+    ctx.fillStyle="#c28755"; ctx.fillRect(s.x-25,s.y-18,50,12);
+    ctx.fillStyle="#e7b27b"; ctx.fillRect(s.x-18,s.y-14,36,3);
+    leg(-23,0); leg(18,0);
+  } else if(type==="sofa"){
+    ctx.fillStyle="#263d5a"; roundedRectPath(s.x-35,s.y-13,70,25,6); ctx.fill();
+    ctx.fillStyle="#587da4"; roundedRectPath(s.x-29,s.y-25,58,17,6); ctx.fill();
+    ctx.fillStyle="#86accd"; roundedRectPath(s.x-24,s.y-21,20,10,4); ctx.fill(); roundedRectPath(s.x+5,s.y-21,20,10,4); ctx.fill();
+    ctx.fillStyle="#202b3b"; ctx.fillRect(s.x-31,s.y+9,6,10); ctx.fillRect(s.x+25,s.y+9,6,10);
+  } else if(type==="desk"){
+    ctx.fillStyle="#51382d"; ctx.fillRect(s.x-36,s.y-10,72,20);
+    ctx.fillStyle="#a47758"; ctx.fillRect(s.x-31,s.y-17,62,9);
+    ctx.fillStyle="#77d4e8"; ctx.fillRect(s.x-15,s.y-15,30,4);
+    leg(-29,4); leg(24,4);
+  } else {
+    ctx.fillStyle="#60445f"; roundedRectPath(s.x-34,s.y-16,68,28,4); ctx.fill();
+    ctx.fillStyle="#e9dfd2"; roundedRectPath(s.x-28,s.y-14,56,13,4); ctx.fill();
+    ctx.fillStyle="#efa8c8"; ctx.fillRect(s.x-22,s.y-10,18,5);
+    ctx.fillStyle="#3b2c3d"; ctx.fillRect(s.x-28,s.y+9,6,12); ctx.fillRect(s.x+22,s.y+9,6,12);
+  }
+  ctx.restore();
+}
+
+// Isometric 3D living-room props.  The front, side and top faces are drawn
+// separately so the wardrobes and sofas look like solid objects in the room.
+function drawBox3D(s,w,h,depth,front,side,top) {
+  const x=s.x, y=s.y;
+  ctx.fillStyle="rgba(0,0,0,.35)";
+  ctx.beginPath(); ctx.ellipse(x,y+8,w*.62,9,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=side;
+  ctx.beginPath(); ctx.moveTo(x+w/2,y-h); ctx.lineTo(x+w/2+depth,y-h+depth*.42); ctx.lineTo(x+w/2+depth,y+depth*.42); ctx.lineTo(x+w/2,y); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=front; ctx.fillRect(x-w/2,y-h,w,h);
+  ctx.fillStyle=top;
+  ctx.beginPath(); ctx.moveTo(x-w/2,y-h); ctx.lineTo(x,y-h-depth*.42); ctx.lineTo(x+w/2,y-h); ctx.lineTo(x,y-h+depth*.42); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle="rgba(255,255,255,.16)"; ctx.lineWidth=1; ctx.strokeRect(x-w/2,y-h,w,h);
+}
+
+function drawWardrobe3D(x,y,w=.95,depth=.58) {
+  const s=worldToScreen(x,y);
+  ctx.save(); ctx.shadowColor="rgba(0,0,0,.45)"; ctx.shadowBlur=14;
+  drawBox3D(s,w*38,58,depth*24,"#684631","#402b27","#9a6b4b");
+  ctx.fillStyle="#b1845c"; ctx.fillRect(s.x-15,s.y-49,1.5,38); ctx.fillRect(s.x+13,s.y-49,1.5,38);
+  ctx.fillStyle="#e0b36e"; ctx.beginPath(); ctx.arc(s.x-3,s.y-30,2,0,Math.PI*2); ctx.arc(s.x+3,s.y-30,2,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawSofa3D(x,y,w=.1,depth=.7,color="#304c70") {
+  const s=worldToScreen(x,y), width=w*38, d=depth*22;
+  ctx.save(); ctx.shadowColor="rgba(0,0,0,.4)"; ctx.shadowBlur=14;
+  drawBox3D(s,width,22,d,color,"#1c2b42","#7895b2");
+  ctx.fillStyle=color;
+  ctx.beginPath(); ctx.roundRect(s.x-width/2+3,s.y-39,width-6,18,5); ctx.fill();
+  ctx.fillStyle="rgba(255,255,255,.18)"; ctx.fillRect(s.x-width/2+width*.48,s.y-36,2,13);
+  ctx.fillStyle="#202b3b"; ctx.fillRect(s.x-width/2+5,s.y+1,6,12); ctx.fillRect(s.x+width/2-11,s.y+1,6,12);
+  ctx.restore();
+}
+
+function drawCoffee() {
+  if (coffee.taken) return;
+  const s=worldToScreen(coffee.x,coffee.y);
+  ctx.save();
+  ctx.translate(s.x,s.y-15);
+  // machine body
+  ctx.shadowColor="rgba(0,0,0,.45)"; ctx.shadowBlur=14; ctx.shadowOffsetY=6;
+  ctx.fillStyle="#111827";
+  ctx.fillRect(-15,-12,30,27);
+  ctx.fillStyle="#334155";
+  ctx.fillRect(-11,-9,22,10);
+  ctx.fillStyle="#8be7f5";
+  ctx.fillRect(-7,-7,14,5);
+  ctx.fillStyle="#171a1f";
+  ctx.fillRect(-6,1,12,5);
+  ctx.fillStyle="#6b4a35";
+  ctx.fillRect(-3,6,6,7);
+  ctx.fillStyle="#ffcf5c";
+  ctx.fillRect(9,-7,3,3);
+  ctx.restore();
+}
+
+function drawPerson(obj,shirt,skin,outline) {
+  const s=worldToScreen(obj.x,obj.y);
+  ctx.save();
+  ctx.translate(s.x,s.y-24);
+  // Skugga, hals, hår och enkla ansiktsdetaljer gör figurerna mer levande.
+  ctx.fillStyle="rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0,29,14,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=outline;
+  ctx.beginPath(); ctx.arc(0,-10,10,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=skin;
+  ctx.beginPath(); ctx.arc(0,-11,7,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle="#3b2925"; ctx.beginPath(); ctx.arc(0,-15,7,Math.PI,Math.PI*2); ctx.fill();
+  ctx.fillStyle="#17202c"; ctx.fillRect(-3,-11,2,2); ctx.fillRect(3,-11,2,2);
+  ctx.fillStyle=skin; ctx.fillRect(-3,-2,6,5);
+  ctx.fillStyle=shirt;
+  roundedRectPath(-10,0,20,21,5); ctx.fill();
+  ctx.fillStyle=outline;
+  ctx.fillRect(-10,19,8,8);
+  ctx.fillRect(2,19,8,8);
+  ctx.restore();
+}
+
+function drawVision() {
+  const dx=player.x-erik.x, dy=player.y-erik.y;
+  const dist=Math.hypot(dx,dy);
+  if (dist>5.2) return;
+
+  // Erik looks toward player when nearby.
+  const a=Math.atan2(dy,dx);
+  const s=worldToScreen(erik.x,erik.y);
+  ctx.save();
+  ctx.globalAlpha=.13;
+  ctx.fillStyle="#ff5d73";
+  ctx.beginPath();
+  ctx.moveTo(s.x,s.y-24);
+  ctx.lineTo(s.x+Math.cos(a-.43)*170,s.y-24+Math.sin(a-.43)*170*.5);
+  ctx.lineTo(s.x+Math.cos(a+.43)*170,s.y-24+Math.sin(a+.43)*170*.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0,0,innerWidth,innerHeight);
+  ctx.fillStyle="#18202a";
+  ctx.fillRect(0,0,innerWidth,innerHeight);
+
+  drawFloor();
+  drawVision();
+  drawCoffee();
+
+  if (!player.carrying) {
+    // interaction circle
+    const dist=Math.hypot(player.x-coffee.x,player.y-coffee.y);
+    if(dist<1.25 && !coffee.taken){
+      const s=worldToScreen(coffee.x,coffee.y);
+      ctx.strokeStyle="#ffd166";
+      ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(s.x,s.y-14,25+Math.sin(performance.now()/120)*3,0,Math.PI*2); ctx.stroke();
+    }
+  }
+
+  drawPerson(erik,"#b63c3c","#e5b18b","#20242b");
+  if(secondRoom){
+    if(!player.hidden){
+      const hides=[{x:2,y:6.1},{x:3,y:3},{x:9.35,y:6.7},{x:8.2,y:2.6}];
+      const target=hides.reduce((best,h)=>Math.hypot(player.x-h.x,player.y-h.y)<Math.hypot(player.x-best.x,player.y-best.y)?h:best,hides[0]);
+      const angle=Math.atan2(target.y-player.y,target.x-player.x), arrowX=innerWidth-58, arrowY=72;
+      ctx.save(); ctx.translate(arrowX,arrowY); ctx.rotate(angle);
+      ctx.fillStyle="#ffd166"; ctx.shadowColor="#000"; ctx.shadowBlur=8;
+      ctx.beginPath(); ctx.moveTo(20,0); ctx.lineTo(-10,-11); ctx.lineTo(-4,0); ctx.lineTo(-10,11); ctx.closePath(); ctx.fill(); ctx.restore();
+      ctx.font="bold 12px Arial"; ctx.textAlign="center"; ctx.fillStyle="#fff"; ctx.fillText("GÖMSTÄLLE",arrowX,arrowY+27); ctx.textAlign="left";
+    }
+  }
+  if(!player.hidden) drawPerson(player,player.carrying?"#5d8fbd":"#4d79a8","#e4b18e","#171b21");
+
+  if(player.carrying){
+    const s=worldToScreen(player.x,player.y);
+    ctx.font="22px Arial";
+    ctx.fillText("☕",s.x+12,s.y-35);
+  }
+
+  // Direction/labels
+  ctx.font="bold 13px Arial";
+  ctx.fillStyle="#fff";
+  const ep=worldToScreen(erik.x,erik.y);
+  ctx.fillStyle="#dbeafe";
+  ctx.fillText("ERIK",ep.x-18,ep.y-48);
+
+  requestAnimationFrame(draw);
+}
+
+function getHideSpot() {
+  const hides=[
+    {x:2,y:6.1,r:1.25,type:"wardrobe"},
+    {x:3,y:3,r:1.35,type:"sofa"},
+    {x:9.35,y:6.7,r:1.25,type:"wardrobe"},
+    {x:8.2,y:2.6,r:1.35,type:"sofa"},
+    {x:13.7,y:4.8,r:1.3,type:"wardrobe"}
+  ];
+  return hides.find(h => Math.hypot(player.x-h.x,player.y-h.y) < h.r) || null;
+}
+
+function lineClear(x1,y1,x2,y2) {
+  const steps=Math.ceil(Math.hypot(x2-x1,y2-y1)*12);
+  for(let i=1;i<steps;i++){
+    const t=i/steps;
+    const x=x1+(x2-x1)*t, y=y1+(y2-y1)*t;
+    if(isWall(x,y) || furniture.some(f => x>f.x-f.w/2 && x<f.x+f.w/2 && y>f.y-f.h/2 && y<f.y+f.h/2)) return false;
+  }
+  return true;
+}
+
+function erikCanSeePlayer() {
+  const dx=player.x-erik.x, dy=player.y-erik.y;
+  const dist=Math.hypot(dx,dy);
+  if(dist>4.4) return false;
+  return lineClear(erik.x,erik.y,player.x,player.y);
+}
+
+function updateErik(dt) {
+  if(secondRoom){
+    const hiddenSpot = getHideSpot();
+    const safeHidden = player.hidden && hiddenSpot;
+    const dx=player.x-erik.x,dy=player.y-erik.y,d=Math.hypot(dx,dy)||1;
+    const flashlightHits=d<5.5 && lineClear(erik.x,erik.y,player.x,player.y);
+
+    if(safeHidden){
+      const searchTargets=[
+        {x:3.4,y:7.8}, {x:7.0,y:2.8}, {x:12.4,y:3.8},
+        {x:14.2,y:9.8}, {x:5.5,y:10.4}, {x:10.5,y:6.2}
+      ];
+      const target=searchTargets[(Math.floor((performance.now()/1000)*0.5)+patrolIndex)%searchTargets.length];
+      const tdX=target.x-erik.x, tdY=target.y-erik.y, td=Math.hypot(tdX,tdY)||1;
+      moveEntity(erik,tdX/td*erik.speed*1.35*dt,tdY/td*erik.speed*1.35*dt);
+      return;
+    }
+
+    if(d<7 || flashlightHits){
+      // Erik rör sig mycket långsammare i vardagsrummet, men fortsätter leta även när du gömmer dig.
+      const chaseSpeed = flashlightHits ? .55 : .38;
+      moveEntity(erik,dx/d*erik.speed*chaseSpeed*dt,dy/d*erik.speed*chaseSpeed*dt);
+      if(!player.hidden && d<.7) endGame(false,"Erik hittade dig!");
+    } else {
+      const target = patrol[(patrolIndex + Math.floor(performance.now()/1500)) % patrol.length];
+      const tdX=target.x-erik.x, tdY=target.y-erik.y, td=Math.hypot(tdX,tdY)||1;
+      moveEntity(erik,tdX/td*erik.speed*dt,tdY/td*erik.speed*dt);
+    }
+    return;
+  }
+  const sees=erikCanSeePlayer();
+
+  if(sees) {
+    detectedTimer += dt;
+    messageEl.textContent = "⚠️ Erik har fått syn på dig! Spring iväg!";
+    messageEl.style.color="#ff7b7b";
+
+    const dx=player.x-erik.x, dy=player.y-erik.y;
+    const d=Math.hypot(dx,dy)||1;
+    moveEntity(erik,dx/d*erik.speed*dt,dy/d*erik.speed*dt);
+
+    if(d<.75 || detectedTimer>1.7) endGame(false,"Erik fick tag på dig!");
+  } else {
+    detectedTimer=Math.max(0,detectedTimer-dt*1.5);
+    messageEl.style.color="#b9c2d0";
+
+    const target=patrol[patrolIndex];
+    const dx=target.x-erik.x,dy=target.y-erik.y;
+    const d=Math.hypot(dx,dy);
+    if(d<.25){
+      patrolIndex=(patrolIndex+1)%patrol.length;
+    } else {
+      moveEntity(erik,dx/d*erik.speed*dt,dy/d*erik.speed*dt);
+    }
+  }
+}
+
+function tryTakeCoffee() {
+  if(gameOver || coffee.taken) return;
+  const d=Math.hypot(player.x-coffee.x,player.y-coffee.y);
+  if(d<1.25){
+    coffee.taken=true;
+    player.carrying=true;
+    statusEl.textContent="☕ Kaffemaskinen är stulen! Ta dig tillbaka till entrén!";
+    messageEl.textContent="Hitta dörren till nästa rum och tryck E. Där kan du gömma dig med E.";
+  } else {
+    messageEl.textContent="Du är för långt från kaffemaskinen.";
+  }
+}
+
+function tryOpenDoor() {
+  if(gameOver || secondRoom || !player.carrying) return;
+  // The wall blocks the player from reaching y=1.3, so allow interaction
+  // from the walkable area directly below the door.
+  if(player.y<2.2 && player.x>10.2 && player.x<13.8){
+    secondRoom=true; livingRoomTime=0; livingRoomLit=true;
+    player.x=6; player.y=7.1; erik.x=10; erik.y=1.5;
+    player.speed=3.5; erik.speed=1.1;
+    statusEl.textContent="☀️ Eriks vardagsrum";
+    messageEl.textContent="Göm dig i garderoben eller under soffan med E för att undvika Erik. Fly genom dörren längst bort.";
+  }
+}
+
+function checkEscape() {
+  if(secondRoom && player.y<1.2 && player.x>4.5 && player.x<7.5){ endGame(true,"Du flydde genom det mörka rummet med kaffemaskinen!"); return; }
+  if(!secondRoom && player.carrying && player.y<2.2 && player.x>10.2 && player.x<13.8){
+    messageEl.textContent="🚪 Tryck E för att öppna dörren till Eriks vardagsrum.";
+  }
+  if(player.carrying && player.y>14.15 && player.x>7.2 && player.x<9.4){
+    endGame(true,"Du lyckades smyga ut med Eriks kaffemaskin!");
+  }
+}
+
+function endGame(win,text) {
+  if(gameOver) return;
+  gameOver=true;
+  overlay.style.display="flex";
+  resultTitle.textContent=win ? "🏆 DU LYCKADES!" : "🚨 DU BLEV PÅKOMMEN!";
+  resultText.textContent=text + " Tryck på knappen för att försöka igen.";
+}
+
+function update(dt) {
+  if(gameOver) return;
+
+  if(introPlaying){
+    introTime+=dt;
+    const beats=[
+      [0,"En sen kväll… du smyger fram till Eriks hus."],
+      [2.4,"Dörren står på glänt. Inne väntar kaffemaskinen."],
+      [4.8,"Var försiktig — Erik är fortfarande hemma." ]
+    ];
+    const beat=beats.slice().reverse().find(b=>introTime>=b[0]);
+    cutsceneText.textContent=beat?beat[1]:"";
+    cutscene.classList.toggle("show",introTime<5.8);
+    if(introTime>=5.8){ introPlaying=false; cutscene.classList.remove("show"); }
+    return;
+  }
+
+  let dx=0,dy=0;
+  if(keys["w"]||keys["arrowup"]) dy-=1;
+  if(keys["s"]||keys["arrowdown"]) dy+=1;
+  if(keys["a"]||keys["arrowleft"]) dx-=1;
+  if(keys["d"]||keys["arrowright"]) dx+=1;
+
+  if(dx||dy){
+    const len=Math.hypot(dx,dy);
+    moveEntity(player,dx/len*player.speed*dt,dy/len*player.speed*dt);
+  }
+
+  if(secondRoom && keys["e"]){
+    const hideSpot=getHideSpot();
+    if(hideSpot){
+      player.hidden=!player.hidden;
+      messageEl.textContent=player.hidden?(hideSpot.type==="wardrobe"?"Du gömmer dig i garderoben. Tryck E för att smyga ut.":"Du kryper under soffan. Tryck E för att smyga ut."):"Du lämnar gömstället — spring!";
+    } else if(player.hidden) player.hidden=false;
+  }
+
+  updateErik(dt);
+  checkEscape();
+
+  if(!secondRoom && !player.carrying){
+    const d=Math.hypot(player.x-coffee.x,player.y-coffee.y);
+    if(d<1.25){
+      messageEl.textContent="☕ Tryck E för att ta kaffemaskinen!";
+      messageEl.style.color="#ffd166";
+    } else {
+      messageEl.textContent="Hitta kaffemaskinen och håll dig undan från Erik.";
+      messageEl.style.color="#b9c2d0";
+    }
+  }
+}
+
+function loop(now){
+  const dt=Math.min((now-last)/1000,.05);
+  last=now;
+  update(dt);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+draw();
+</script>
+</body>
+</html>
